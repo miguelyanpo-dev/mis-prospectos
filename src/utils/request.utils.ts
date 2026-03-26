@@ -18,7 +18,7 @@ export const IdParamSchema = z.object({
 export type DbResolutionOk = { kind: 'ok'; db: Pool };
 export type DbResolutionError = {
   kind: 'error';
-  status: 400 | 404;
+  status: 400;
   body: { success: false; error: string; message?: string };
 };
 export type DbResolution = DbResolutionOk | DbResolutionError;
@@ -50,8 +50,8 @@ export function resolveDb(c: Context): DbResolution {
   if (process.env.NODE_ENV === 'production' && process.env.ENABLE_DB_REF !== 'true') {
     return {
       kind: 'error',
-      status: 404,
-      body: { success: false, error: 'Not Found' },
+      status: 400 as const,
+      body: { success: false, error: 'Bad Request', message: 'Database access not enabled' },
     };
   }
 

@@ -4,7 +4,6 @@ import { swaggerUI } from '@hono/swagger-ui';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { logger } from './middlewares/logger';
 import { config } from './config/config';
-import sellersRouter from './routes/sellers.routes';
 import contactsRouter from './routes/contacts.routes';
 
 const app = new Hono();
@@ -24,7 +23,6 @@ app.use('*', logger());
 
 // Mount routes
 apiV1.route('/contacts', contactsRouter);
-apiV1.route('/sellers', sellersRouter);
 
 // OpenAPI documentation
 apiV1.doc('/openapi.json', {

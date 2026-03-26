@@ -5,6 +5,7 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { logger } from './middlewares/logger';
 import { config } from './config/config';
 import sellersRouter from './routes/sellers.routes';
+import contactsRouter from './routes/contacts.routes';
 
 const app = new Hono();
 const apiV1 = new OpenAPIHono();
@@ -22,15 +23,16 @@ app.use('*', cors({
 app.use('*', logger());
 
 // Mount routes
+apiV1.route('/contacts', contactsRouter);
 apiV1.route('/sellers', sellersRouter);
 
 // OpenAPI documentation
 apiV1.doc('/openapi.json', {
   openapi: '3.0.0',
   info: {
-    title: 'HBSP Mis Prospectos API',
+    title: 'HBSP Gestión de Contactos API',
     version: '1.0.0',
-    description: 'API REST para gestionar prospectos.',
+    description: 'API REST para gestionar contactos: clientes, proveedores, empleados y vendedores.',
   },
   servers: [
     {

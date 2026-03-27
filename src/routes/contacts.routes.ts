@@ -8,6 +8,7 @@ import {
   ContactIdParam,
   CreateContactBody,
   UpdateContactBody,
+  ContactSchema,
 } from '../schemas/contacts.schemas';
 import {
   getContacts,
@@ -19,7 +20,7 @@ import {
 
 const router = new OpenAPIHono();
 
-// ─── Schemas de respuesta locales ─────────────────────────────────────────────
+// ─── Schemas de respuesta reutilizables ───────────────────────────────────────
 
 const ErrorResponseSchema = z.object({
   success: z.boolean(),
@@ -27,50 +28,95 @@ const ErrorResponseSchema = z.object({
   message: z.string().optional(),
 });
 
+const SingleContactResponse = z.object({
+  success: z.boolean(),
+  data: ContactSchema,
+});
+
+const PaginatedContactResponse = z.object({
+  success: z.boolean(),
+  data: z.array(ContactSchema),
+  data_items: z.number().describe('Total de registros encontrados'),
+  page_current: z.number().describe('Página actual'),
+  page_total: z.number().describe('Total de páginas'),
+  have_next_page: z.boolean(),
+  have_previous_page: z.boolean(),
+});
+
+const DeleteSuccessResponse = z.object({
+  success: z.boolean(),
+  message: z.string(),
+});
+
+// ─── Ejemplos reutilizables ───────────────────────────────────────────────────
+
+const EXAMPLE_CUSTOMER = {
+  contact_name: 'Empresa ABC S.A.S.',
+  identification: '900123456-1',
+  company_name: 'ABC S.A.S.',
+  phone_mobile: '+57 310 000 0001',
+  email: 'contacto@abc.com',
+  is_customer: true,
+  address_billing_city: 'Bogotá',
+  created_by_user_id: 1,
+};
+
+const EXAMPLE_SELLER = {
+  contact_name: 'Carlos López',
+  identification: '1020304050',
+  phone_mobile: '+57 300 000 0001',
+  email: 'carlos.lopez@empresa.com',
+  is_employee: true,
+  is_seller: true,
+  seller_code: 'V001',
+  seller_is_active: true,
+  created_by_user_id: 1,
+};
+
+const EXAMPLE_SUPPLIER = {
+  contact_name: 'Proveedor XYZ Ltda.',
+  identification: '800987654-2',
+  company_name: 'XYZ Ltda.',
+  phone_mobile: '+57 320 000 0001',
+  email: 'ventas@xyz.com',
+  is_supplier: true,
+  created_by_user_id: 1,
+};
+
 // ─── GET /contacts ────────────────────────────────────────────────────────────
 
 const getListRoute = createRoute({
   method: 'get',
   path: '/',
   tags: ['Contacts'],
-  summary: 'Obtener lista de contactos',
+  summary: 'Listar contactos',
   description: [
-    'Retorna la lista paginada de contactos.',
+    'Retorna la lista paginada de contactos con soporte de búsqueda y filtro por tipo.',
     '',
-    '**Filtro `type`:**',
-    '- `seller` → vendedores (`is_seller = true`)',
-    '- `customer` → clientes (`is_customer = true`)',
-    '- `supplier` → proveedores (`is_supplier = true`)',
-    '- `employee` → empleados (`is_employee = true`)',
-    '- `prospect` → prospectos (`is_prospect = true`)',
+    '### Filtro `type`',
+    '| Valor | Descripción |',
+    '|---|---|',
+    '| `seller` | Vendedores (`is_seller = true`) — incluye `seller_code` y `seller_is_active` |',
+    '| `customer` | Clientes (`is_customer = true`) |',
+    '| `supplier` | Proveedores (`is_supplier = true`) |',
+    '| `employee` | Empleados (`is_employee = true`) |',
+    '| `prospect` | Prospectos (`is_prospect = true`) |',
     '',
-    'El campo `seller_code` y `seller_is_active` solo aparecen cuando el contacto es vendedor.',
+    '> Sin `type` retorna todos los contactos activos.',
   ].join('\n'),
   request: { query: ContactsListQuery },
   responses: {
     200: {
-      content: {
-        'application/json': {
-          schema: z.object({
-            success: z.boolean(),
-            data: z.array(z.record(z.string(), z.unknown())),
-            data_items: z.number(),
-            page_current: z.number(),
-            page_total: z.number(),
-            have_next_page: z.boolean(),
-            have_previous_page: z.boolean(),
-          }),
-        },
-      },
-      description: 'Lista de contactos',
+      content: { 'application/json': { schema: PaginatedContactResponse } },
+      description: 'Lista de contactos paginada',
     },
     400: {
       content: { 'application/json': { schema: ErrorResponseSchema } },
-      description: 'Parámetros inválidos (falta ref)',
+      description: 'Falta el parámetro `ref`',
     },
     500: {
       content: { 'application/json': { schema: ErrorResponseSchema } },
-      description: 'Error interno',
+      description: 'Error interno del servidor',
     },
   },
 });
@@ -101,18 +147,14 @@ const getByIdRoute = createRoute({
   path: '/:id',
   tags: ['Contacts'],
   summary: 'Obtener contacto por ID',
-  description: 'Retorna el contacto completo. Si es vendedor, incluye `seller_code` y `seller_is_active`.',
+  description: 'Retorna el contacto completo. Si es vendedor, incluye `seller_id`, `seller_code` y `seller_is_active`.',
   request: {
     params: ContactIdParam,
     query: ContactByIdQuery,
   },
   responses: {
     200: {
-      content: {
-        'application/json': {
-          schema: z.object({ success: z.boolean(), data: z.record(z.string(), z.unknown()) }),
-        },
-      },
+      content: { 'application/json': { schema: SingleContactResponse } },
       description: 'Contacto encontrado',
     },
     400: {
@@ -158,35 +200,41 @@ const createContactRoute = createRoute({
   tags: ['Contacts'],
   summary: 'Crear contacto',
   description: [
-    'Crea un nuevo contacto. Puede ser cualquier tipo o combinación de tipos.',
+    'Crea un nuevo contacto. Un contacto puede tener uno o varios tipos simultáneamente.',
     '',
-    '**Si `is_seller = true`**: también crea el registro en la tabla `sellers` automáticamente.',
-    'Puedes incluir `seller_code` y `seller_is_active` en el mismo body.',
+    '### Comportamiento automático',
+    '- Si `is_seller = true` → crea el registro en la tabla `sellers` en la misma transacción.',
+    '- Los campos `seller_code` y `seller_is_active` solo aplican cuando `is_seller = true`.',
     '',
-    '**Ejemplos:**',
-    '- Cliente: `{ "contact_name": "...", "is_customer": true }`',
-    '- Proveedor: `{ "contact_name": "...", "is_supplier": true }`',
-    '- Empleado-Vendedor: `{ "contact_name": "...", "is_employee": true, "is_seller": true, "seller_code": "V001" }`',
+    '### Tipos de contacto',
+    '| Flag | Descripción |',
+    '|---|---|',
+    '| `is_customer` | Cliente |',
+    '| `is_supplier` | Proveedor |',
+    '| `is_employee` | Empleado |',
+    '| `is_seller` | Vendedor (genera registro en tabla `sellers`) |',
+    '| `is_prospect` | Prospecto |',
   ].join('\n'),
   request: {
     query: ContactByIdQuery,
     body: {
-      content: { 'application/json': { schema: CreateContactBody } },
+      content: {
+        'application/json': {
+          schema: CreateContactBody,
+          example: EXAMPLE_CUSTOMER,
+        },
+      },
       required: true,
     },
   },
   responses: {
     201: {
-      content: {
-        'application/json': {
-          schema: z.object({ success: z.boolean(), data: z.record(z.string(), z.unknown()) }),
-        },
-      },
+      content: { 'application/json': { schema: SingleContactResponse } },
       description: 'Contacto creado exitosamente',
     },
     400: {
       content: { 'application/json': { schema: ErrorResponseSchema } },
-      description: 'Datos inválidos',
+      description: 'Datos inválidos o falta `ref`',
     },
     500: {
       content: { 'application/json': { schema: ErrorResponseSchema } },
@@ -212,6 +260,9 @@ router.openapi(createContactRoute, async (c) => {
   }
 });
 
+// ─── POST /contacts/seller — ejemplo específico de vendedor ──────────────────
+// (ruta de conveniencia documentada como ejemplo adicional en el POST)
+
 // ─── PATCH /contacts/:id ──────────────────────────────────────────────────────
 
 const updateContactRoute = createRoute({
@@ -220,28 +271,34 @@ const updateContactRoute = createRoute({
   tags: ['Contacts'],
   summary: 'Actualizar contacto',
   description: [
-    'Actualiza los campos enviados del contacto.',
+    'Actualiza únicamente los campos enviados en el body.',
     '',
-    '**Comportamiento especial:**',
-    '- Si se envía `is_seller: true` y el contacto aún no tiene registro en `sellers`, lo crea automáticamente.',
-    '- Si ya existe el registro en `sellers`, `seller_code` y `seller_is_active` lo actualizan.',
+    '### Comportamiento especial',
+    '- **`is_seller: true`** en un contacto que no era vendedor → crea automáticamente el registro en `sellers`.',
+    '- **`seller_code` / `seller_is_active`** → actualiza la tabla `sellers` si ya existe el registro.',
   ].join('\n'),
   request: {
     params: ContactIdParam,
     query: ContactByIdQuery,
     body: {
-      content: { 'application/json': { schema: UpdateContactBody } },
+      content: {
+        'application/json': {
+          schema: UpdateContactBody,
+          example: {
+            phone_mobile: '+57 310 999 8888',
+            email: 'nuevo@email.com',
+            is_customer: true,
+            updated_by_user_id: 1,
+          },
+        },
+      },
       required: true,
     },
   },
   responses: {
     200: {
-      content: {
-        'application/json': {
-          schema: z.object({ success: z.boolean(), data: z.record(z.string(), z.unknown()) }),
-        },
-      },
-      description: 'Contacto actualizado',
+      content: { 'application/json': { schema: SingleContactResponse } },
+      description: 'Contacto actualizado exitosamente',
     },
     400: {
       content: { 'application/json': { schema: ErrorResponseSchema } },
@@ -285,20 +342,19 @@ const deleteContactRoute = createRoute({
   method: 'delete',
   path: '/:id',
   tags: ['Contacts'],
-  summary: 'Eliminar contacto (soft delete)',
-  description: 'Marca como eliminado el contacto y su registro en `sellers` si existe.',
+  summary: 'Eliminar contacto',
+  description: [
+    'Soft delete: llena `deleted_at` en el contacto.',
+    'Si el contacto tenía registro en `sellers`, también lo marca como eliminado.',
+  ].join('\n'),
   request: {
     params: ContactIdParam,
     query: ContactDeleteQuery,
   },
   responses: {
     200: {
-      content: {
-        'application/json': {
-          schema: z.object({ success: z.boolean(), message: z.string() }),
-        },
-      },
-      description: 'Contacto eliminado',
+      content: { 'application/json': { schema: DeleteSuccessResponse } },
+      description: 'Contacto eliminado exitosamente',
     },
     400: {
       content: { 'application/json': { schema: ErrorResponseSchema } },
@@ -339,4 +395,5 @@ router.openapi(deleteContactRoute, async (c) => {
   }
 });
 
+export { EXAMPLE_CUSTOMER, EXAMPLE_SELLER, EXAMPLE_SUPPLIER };
 export default router;
